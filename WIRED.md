@@ -22,6 +22,11 @@ All patched code is marked with `wired patch` comments.
   pointer, or away from it, kept the wrong `.hover()` style until the mouse moved. It is now also
   compared with each frame's hit test at paint time, the way the `on_hover` listener already is.
 
+- **Remove some key bindings** (`src/keymap.rs` `Keymap::retain`, `src/app.rs`
+  `App::retain_key_bindings`): keeps only the bindings a predicate accepts, so an app can replace
+  its own bindings (a keymap file reload) without `clear_key_bindings` also dropping the bindings
+  other crates registered.
+
 ### gpui-pre-windows
 
 - **Skia-style text** (`src/wired_text.rs`, `set_skia_text`): renders text the way Chromium on

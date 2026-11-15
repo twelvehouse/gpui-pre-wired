@@ -2734,6 +2734,13 @@ impl App {
         self.pending_effects.push_back(Effect::RefreshWindows);
     }
 
+    /// Keep only the key bindings for which `keep` returns true.
+    // wired patch: see `Keymap::retain`.
+    pub fn retain_key_bindings(&mut self, keep: impl Fn(&KeyBinding) -> bool) {
+        self.keymap.borrow_mut().retain(keep);
+        self.pending_effects.push_back(Effect::RefreshWindows);
+    }
+
     /// Clear all key bindings in the app.
     pub fn clear_key_bindings(&mut self) {
         self.keymap.borrow_mut().clear();

@@ -77,6 +77,15 @@ impl Keymap {
         self.version.0 += 1;
     }
 
+    /// Keeps only the bindings for which `keep` returns true, in their order.
+    // wired patch: lets an app replace its own bindings (e.g. on a keymap file reload)
+    // without clearing the bindings other crates registered.
+    pub fn retain(&mut self, keep: impl Fn(&KeyBinding) -> bool) {
+        let bindings = std::mem::take(&mut self.bindings);
+        self.clear();
+        self.add_bindings(bindings.into_iter().filter(|binding| keep(binding)));
+    }
+
     /// Reset this keymap to its initial state.
     pub fn clear(&mut self) {
         self.bindings.clear();
