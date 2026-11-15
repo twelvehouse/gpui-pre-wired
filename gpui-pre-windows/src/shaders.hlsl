@@ -14,6 +14,40 @@ cbuffer BatchParams: register(b1) {
     uint3 batch_pad;
 };
 
+// wired patch: Skia-style mask gamma, enabled by global_pad.x (see wired_text.rs). Ported from
+// Skia, see LICENSE-SKIA:
+// https://github.com/google/skia/blob/815b987b2ca82b80993ebc08a309a5275522ab0e/src/core/SkMaskGamma.cpp (SkTMaskGamma_build_correcting_lut)
+// https://github.com/google/skia/blob/815b987b2ca82b80993ebc08a309a5275522ab0e/src/core/SkMaskGamma.h (CanonicalColor, sk_t_scale255)
+// Copyright 2012 Google Inc. Use of this source code is governed by a BSD-style license.
+
+// A8 luminance: SkComputeLuminance on sRGB bytes, quantized to 3 bits (SkTMaskGamma<3,3,3>).
+float skia_luminance(float3 color) {
+    uint3 c = uint3(round(saturate(color) * 255.0f));
+    uint q = ((c.r * 54 + c.g * 183 + c.b * 19) >> 8) >> 5;
+    return float((q << 5) | (q << 2) | (q >> 1)) / 255.0f;
+}
+
+// pow() for x >= 0 that is exactly 0 at x == 0. HLSL pow is exp2(y * log2(x)); with fxc
+// optimizations log2(0) can turn into NaN, which made white text (dst == 0) invisible in release
+// builds, where shaders are compiled offline.
+float skia_pow(float x, float y) {
+    return x <= 0.0f ? 0.0f : pow(x, y);
+}
+
+// Skia guesses the background as the inverse of the text luminance and corrects coverage so
+// that blending in sRGB looks gamma correct.
+float skia_mask_gamma(float coverage, float src, float contrast, float gamma) {
+    float dst = 1.0f - src;
+    float lin_src = skia_pow(src, gamma);
+    float lin_dst = skia_pow(dst, gamma);
+    float srca = coverage + (1.0f - coverage) * contrast * lin_dst * coverage;
+    if (abs(src - dst) < (1.0f / 256.0f)) {
+        return srca;
+    }
+    float lin_out = lin_src * srca + (1.0f - srca) * lin_dst;
+    return saturate((skia_pow(lin_out, 1.0f / gamma) - dst) / (src - dst));
+}
+
 Texture2D<float4> t_sprite: register(t0);
 SamplerState s_sprite: register(s0);
 
@@ -1183,7 +1217,9 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
 
 float4 monochrome_sprite_fragment(MonochromeSpriteFragmentInput input): SV_Target {
     float sample = t_sprite.Sample(s_sprite, input.tile_position).r;
-    float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
+    float alpha_corrected = global_pad.x != 0
+        ? skia_mask_gamma(sample, skia_luminance(input.color.rgb), asfloat(global_pad.y), asfloat(global_pad.z))
+        : apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
     return float4(input.color.rgb, input.color.a * alpha_corrected);
 }
 

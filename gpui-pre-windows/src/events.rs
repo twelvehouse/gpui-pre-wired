@@ -20,6 +20,31 @@ use windows::{
 use crate::*;
 use gpui::*;
 
+/// wired patch: extra room around the caret for the candidate window, in logical pixels. Above is
+/// larger because a window opened upwards casts its drop shadow onto the text.
+const CANDIDATE_MARGIN_ABOVE: f32 = 8.;
+const CANDIDATE_MARGIN_BELOW: f32 = 4.;
+
+/// wired patch: the caret bounds (logical window coordinates) in physical client pixels.
+pub(crate) fn caret_rect(bounds: Bounds<Pixels>, scale_factor: f32) -> RECT {
+    let to_px = |v: Pixels| (v.as_f32() * scale_factor) as i32;
+    RECT {
+        left: to_px(bounds.origin.x),
+        top: to_px(bounds.origin.y),
+        right: to_px(bounds.origin.x + bounds.size.width),
+        bottom: to_px(bounds.origin.y + bounds.size.height),
+    }
+}
+
+/// wired patch: the area the candidate window must not cover: the caret plus the margins.
+fn candidate_exclude_rect(caret: RECT, scale_factor: f32) -> RECT {
+    RECT {
+        top: caret.top - (CANDIDATE_MARGIN_ABOVE * scale_factor) as i32,
+        bottom: caret.bottom + (CANDIDATE_MARGIN_BELOW * scale_factor) as i32,
+        ..caret
+    }
+}
+
 pub(crate) const WM_GPUI_CURSOR_STYLE_CHANGED: u32 = WM_USER + 1;
 pub(crate) const WM_GPUI_CLOSE_ONE_WINDOW: u32 = WM_USER + 2;
 pub(crate) const WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD: u32 = WM_USER + 3;
@@ -642,36 +667,37 @@ impl WindowsWindowInner {
         if handled { Some(0) } else { Some(1) }
     }
 
-    fn retrieve_caret_position(&self) -> Option<POINT> {
+    fn retrieve_caret_rect(&self) -> Option<RECT> {
         self.with_input_handler_and_scale_factor(|input_handler, scale_factor| {
             let caret_range = input_handler.selected_text_range(false)?;
-            let caret_position = input_handler.bounds_for_range(caret_range.range)?;
-            Some(POINT {
-                // logical to physical
-                x: (caret_position.origin.x.as_f32() * scale_factor) as i32,
-                y: (caret_position.origin.y.as_f32() * scale_factor) as i32
-                    + ((caret_position.size.height.as_f32() * scale_factor) as i32 / 2),
-            })
+            let caret_bounds = input_handler.bounds_for_range(caret_range.range)?;
+            Some(caret_rect(caret_bounds, scale_factor))
         })
     }
 
     fn handle_ime_position(&self, handle: HWND) -> Option<isize> {
-        if let Some(caret_position) = self.retrieve_caret_position() {
-            self.update_ime_position(handle, caret_position);
+        if let Some(caret) = self.retrieve_caret_rect() {
+            self.update_ime_position(handle, caret);
         }
         Some(0)
     }
 
-    pub(crate) fn update_ime_position(&self, handle: HWND, caret_position: POINT) {
+    // wired patch: the candidate window gets the caret rectangle to stay clear of (CFS_EXCLUDE),
+    // as Chromium's IMM32Manager::MoveImeWindow does. With only a point (CFS_CANDIDATEPOS) at the
+    // middle of the line, an IME that opens the list above the caret (no room below) covered the
+    // lower half of the text being composed.
+    pub(crate) fn update_ime_position(&self, handle: HWND, caret: RECT) {
         let Some(ctx) = ImeContext::get(handle) else {
             return;
         };
+        let top_left = POINT { x: caret.left, y: caret.top };
+        let exclude = candidate_exclude_rect(caret, self.state.scale_factor.get());
         unsafe {
             ImmSetCompositionWindow(
                 *ctx,
                 &COMPOSITIONFORM {
                     dwStyle: CFS_POINT,
-                    ptCurrentPos: caret_position,
+                    ptCurrentPos: top_left,
                     ..Default::default()
                 },
             )
@@ -681,8 +707,9 @@ impl WindowsWindowInner {
             ImmSetCandidateWindow(
                 *ctx,
                 &CANDIDATEFORM {
-                    dwStyle: CFS_CANDIDATEPOS,
-                    ptCurrentPos: caret_position,
+                    dwStyle: CFS_EXCLUDE,
+                    ptCurrentPos: top_left,
+                    rcArea: exclude,
                     ..Default::default()
                 },
             )

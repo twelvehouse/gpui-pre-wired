@@ -217,7 +217,8 @@ impl DirectXRenderer {
                 grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
                 subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
                 is_bgr: self.font_info.is_bgr as u32,
-                _pad: [0; 3],
+                // wired patch: Skia-style text switch and parameters for the shaders.
+                _pad: crate::wired_text::skia_shader_params(),
             }],
         )?;
         unsafe {
@@ -856,6 +857,8 @@ impl DirectXRenderer {
             let factory: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).unwrap();
             let render_params: IDWriteRenderingParams1 =
                 factory.CreateRenderingParams().unwrap().cast().unwrap();
+            // wired patch: Skia-style text defaults to these values, as Chromium does.
+            crate::wired_text::record_system_text_params(render_params.GetGamma(), render_params.GetEnhancedContrast());
             FontInfo {
                 gamma_ratios: gpui::get_gamma_correction_ratios(render_params.GetGamma()),
                 grayscale_enhanced_contrast: render_params.GetGrayscaleEnhancedContrast(),

@@ -190,7 +190,8 @@ impl PlatformTextSystem for DirectWriteTextSystem {
         _font_id: FontId,
         _font_size: Pixels,
     ) -> TextRenderingMode {
-        if self.components.system_subpixel_rendering {
+        // wired patch: Skia-style text is grayscale, as in a transparent Chromium canvas.
+        if self.components.system_subpixel_rendering && !crate::wired_text::skia_text() {
             TextRenderingMode::Subpixel
         } else {
             TextRenderingMode::Grayscale
@@ -681,6 +682,9 @@ impl DirectWriteState {
             DWRITE_RENDERING_MODE1_OUTLINE => DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
             mode => mode,
         };
+        // wired patch: Skia always grid fits normally hinted text (SkScalerContext_win_dw.cpp,
+        // SkFontHinting::kNormal -> DWRITE_GRID_FIT_MODE_ENABLED); Chromium uses medium hinting.
+        let grid_fit_mode = if crate::wired_text::skia_text() { DWRITE_GRID_FIT_MODE_ENABLED } else { grid_fit_mode };
         Ok((rendering_mode, grid_fit_mode))
     }
 
@@ -690,7 +694,8 @@ impl DirectWriteState {
         params: &RenderGlyphParams,
     ) -> Result<IDWriteGlyphRunAnalysis> {
         let (rendering_mode, grid_fit_mode) = self.rendering_mode(params)?;
-        let antialias_mode = if params.subpixel_rendering {
+        // wired patch: Skia-style text is rasterized as ClearType 3x1 and averaged (see below).
+        let antialias_mode = if params.subpixel_rendering || crate::wired_text::skia_text() {
             DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE
         } else {
             DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE
@@ -780,6 +785,7 @@ impl DirectWriteState {
         } else {
             Vec::new()
         };
+        let is_color = !color_layers.is_empty();
         let analyses: SmallVec<[IDWriteGlyphRunAnalysis; 1]> = if color_layers.is_empty() {
             smallvec::smallvec![self.glyph_analysis(components, params)?]
         } else {
@@ -788,7 +794,9 @@ impl DirectWriteState {
                 .map(|layer| layer.analysis)
                 .collect()
         };
-        let texture_type = if params.subpixel_rendering {
+        // wired patch: color layers are analyzed in grayscale and report no ClearType bounds, so
+        // Skia-style text must not switch them to the ClearType texture (emoji vanished).
+        let texture_type = if !is_color && (params.subpixel_rendering || crate::wired_text::skia_text()) {
             DWRITE_TEXTURE_CLEARTYPE_3x1
         } else {
             DWRITE_TEXTURE_ALIASED_1x1
@@ -855,6 +863,28 @@ impl DirectWriteState {
         glyph_bounds: Bounds<DevicePixels>,
     ) -> Result<Vec<u8>> {
         let glyph_analysis = self.glyph_analysis(components, params)?;
+        if !params.subpixel_rendering && crate::wired_text::skia_text() {
+            // wired patch: A8 from LCD coverage, like Skia's `SkScalerContext_DW::RGBToA8`
+            // (https://github.com/google/skia/blob/815b987b2ca82b80993ebc08a309a5275522ab0e/src/ports/SkScalerContext_win_dw.cpp, BSD-style license, see LICENSE-SKIA).
+            let pixel_count = glyph_bounds.size.width.0 as usize * glyph_bounds.size.height.0 as usize;
+            let mut rgb = vec![0u8; pixel_count * 3];
+            unsafe {
+                glyph_analysis.CreateAlphaTexture(
+                    DWRITE_TEXTURE_CLEARTYPE_3x1,
+                    &RECT {
+                        left: glyph_bounds.origin.x.0,
+                        top: glyph_bounds.origin.y.0,
+                        right: glyph_bounds.size.width.0 + glyph_bounds.origin.x.0,
+                        bottom: glyph_bounds.size.height.0 + glyph_bounds.origin.y.0,
+                    },
+                    &mut rgb,
+                )?;
+            }
+            return Ok(rgb
+                .chunks_exact(3)
+                .map(|p| ((p[0] as u16 + p[1] as u16 + p[2] as u16) / 3) as u8)
+                .collect());
+        }
         if !params.subpixel_rendering {
             let mut bitmap_data =
                 vec![0u8; glyph_bounds.size.width.0 as usize * glyph_bounds.size.height.0 as usize];

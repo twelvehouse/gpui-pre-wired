@@ -18,6 +18,7 @@ mod system_settings;
 mod util;
 mod vsync;
 mod window;
+mod wired_text;
 mod wrapper;
 
 pub(crate) use clipboard::*;
@@ -39,5 +40,6 @@ pub(crate) use window::*;
 pub(crate) use wrapper::*;
 
 pub use platform::WindowsPlatform;
+pub use wired_text::set_skia_text;
 
 pub(crate) use windows::Win32::Foundation::HWND;
