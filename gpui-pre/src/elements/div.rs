@@ -2916,6 +2916,20 @@ impl Interactivity {
             });
             let current_view = window.current_view();
 
+            // wired patch: also compare with this frame's hit test, as the hover listener does,
+            // so an element that moves under a still pointer (or away from it) restyles without
+            // waiting for the next mouse move.
+            if let Some(hover_state) = &hover_state {
+                let hovered = hitbox.is_hovered(window);
+                if hovered != hover_state.borrow().element {
+                    let hover_state = hover_state.clone();
+                    window.defer(cx, move |_, cx| {
+                        hover_state.borrow_mut().element = hovered;
+                        cx.notify(current_view);
+                    });
+                }
+            }
+
             window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
                 let hovered = hitbox.is_hovered(window);
                 let was_hovered = hover_state
@@ -2937,6 +2951,18 @@ impl Interactivity {
                     .and_then(|element| element.hover_state.as_ref())
                     .cloned();
                 let current_view = window.current_view();
+
+                // wired patch: same frame-time check as for the element's own hover state.
+                if let Some(hover_state) = &hover_state {
+                    let group_hovered = group_hitbox_id.is_hovered(window);
+                    if group_hovered != hover_state.borrow().group {
+                        let hover_state = hover_state.clone();
+                        window.defer(cx, move |_, cx| {
+                            hover_state.borrow_mut().group = group_hovered;
+                            cx.notify(current_view);
+                        });
+                    }
+                }
 
                 window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
                     let group_hovered = group_hitbox_id.is_hovered(window);
