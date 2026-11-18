@@ -47,6 +47,14 @@ All patched code is marked with `wired patch` comments.
   of a point at the middle of the line (`CFS_CANDIDATEPOS`). When there is no room below, the IME
   opens the list above the text instead of over it.
 
+- **New windows are created on their display** (`src/window.rs`, `WindowsWindow::new`):
+  `CreateWindowExW` gets the requested bounds in that display's device pixels instead of
+  `CW_USEDEFAULT`. A window created on another monitor and then placed on a display with a higher
+  scale received `WM_DPICHANGED`, whose suggested rect scaled the already scaled size once more, so
+  it opened at the wrong size: 1.5 times as large on a 150 % monitor while the primary is at 100 %,
+  and two thirds as large the other way round. `retrieve_window_placement` now takes those same
+  device-pixel bounds, so the choice of bounds and their conversion happen in one place.
+
 ## Licenses
 
 - gpui-pre and gpui-pre-windows: Apache-2.0, see `LICENSE-APACHE` in each folder.
