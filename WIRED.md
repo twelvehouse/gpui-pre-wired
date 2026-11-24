@@ -27,7 +27,18 @@ All patched code is marked with `wired patch` comments.
   its own bindings (a keymap file reload) without `clear_key_bindings` also dropping the bindings
   other crates registered.
 
+- **Tell a platform whether the App is borrowed** (`src/app.rs`, `is_app_borrowed`): a per-thread
+  count of live `AppRef`/`AppRefMut` borrows, used by the Windows patch below.
+
 ### gpui-pre-windows
+
+- **No foreground tasks inside an App borrow** (`src/platform.rs` `run_foreground_task`,
+  `src/events.rs` size-move timer): foreground tasks run when the hidden platform window gets a
+  posted message, and any nested message loop dispatches it, e.g. a COM or IME call made while a
+  window callback has the App borrowed. A task run there borrowed the App again; the panic inside
+  the window procedure cannot unwind, so the process aborted (`RefCell already borrowed`, exit code
+  `0xC0000409`). While the App is borrowed the tasks are now left queued and retried from a timer on
+  the platform window.
 
 - **Skia-style text** (`src/wired_text.rs`, `set_skia_text`): renders text the way Chromium on
   Windows draws into a transparent canvas, which is what xterm.js-based terminals show:

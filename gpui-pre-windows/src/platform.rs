@@ -1216,6 +1216,10 @@ impl WindowsPlatformInner {
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
             | WM_GPUI_DISPLAYS_CHANGED
             | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(msg, wparam, lparam),
+            WM_TIMER if wparam.0 == FOREGROUND_RETRY_TIMER_ID => {
+                unsafe { KillTimer(Some(handle), FOREGROUND_RETRY_TIMER_ID).log_err() };
+                self.run_foreground_task()
+            }
             WM_POWERBROADCAST => self.handle_power_broadcast(wparam, lparam),
             WM_DISPLAYCHANGE => self.handle_display_change(handle),
             WM_QUERYENDSESSION => Some(1),
@@ -1307,6 +1311,27 @@ impl WindowsPlatformInner {
     #[inline]
     fn run_foreground_task(&self) -> Option<isize> {
         const MAIN_TASK_TIMEOUT: u128 = 10;
+
+        // wired patch: see `is_app_borrowed`.
+        if is_app_borrowed() {
+            let handle = self.dispatcher.platform_window_handle.as_raw();
+            let timer = unsafe {
+                SetTimer(
+                    Some(handle),
+                    FOREGROUND_RETRY_TIMER_ID,
+                    USER_TIMER_MINIMUM,
+                    None,
+                )
+            };
+            if timer == 0 {
+                log::error!(
+                    "unable to defer foreground tasks: {}",
+                    std::io::Error::last_os_error()
+                );
+                self.dispatcher.wake_posted.store(false, Ordering::Release);
+            }
+            return Some(0);
+        }
 
         let start = std::time::Instant::now();
         'tasks: loop {
@@ -1811,6 +1836,8 @@ fn handle_gpu_device_lost(
 }
 
 const PLATFORM_WINDOW_CLASS_NAME: PCWSTR = w!("Zed::PlatformWindow");
+// wired patch: see `run_foreground_task`.
+const FOREGROUND_RETRY_TIMER_ID: usize = 1;
 
 fn register_platform_window_class() {
     let wc = WNDCLASSW {

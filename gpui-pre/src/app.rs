@@ -122,6 +122,19 @@ impl std::fmt::Debug for AppBorrowError {
 
 impl std::error::Error for AppBorrowError {}
 
+thread_local! {
+    // wired patch: see `is_app_borrowed`.
+    static APP_BORROWS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// wired patch: whether this thread is inside an App borrow. A platform checks it before running
+/// foreground tasks from a nested message loop (e.g. a COM or IME call made while the App is
+/// borrowed); running one there would borrow the App again and panic.
+#[doc(hidden)]
+pub fn is_app_borrowed() -> bool {
+    APP_BORROWS.get() > 0
+}
+
 impl AppCell {
     #[doc(hidden)]
     #[track_caller]
@@ -147,6 +160,7 @@ impl AppCell {
             self.borrow_origin
                 .set(Some((std::panic::Location::caller(), "shared")));
         }
+        APP_BORROWS.set(APP_BORROWS.get() + 1);
         AppRef(borrow)
     }
 
@@ -176,6 +190,7 @@ impl AppCell {
         };
         self.borrow_origin
             .set(Some((std::panic::Location::caller(), "mutable")));
+        APP_BORROWS.set(APP_BORROWS.get() + 1);
         Ok(AppRefMut(borrow))
     }
 }
@@ -190,6 +205,7 @@ impl Drop for AppRef<'_> {
             let thread_id = std::thread::current().id();
             eprintln!("dropped borrow from {thread_id:?}");
         }
+        APP_BORROWS.set(APP_BORROWS.get() - 1);
     }
 }
 
@@ -203,6 +219,7 @@ impl Drop for AppRefMut<'_> {
             let thread_id = std::thread::current().id();
             eprintln!("dropped {thread_id:?}");
         }
+        APP_BORROWS.set(APP_BORROWS.get() - 1);
     }
 }
 
